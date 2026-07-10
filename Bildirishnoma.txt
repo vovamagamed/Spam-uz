@@ -1,0 +1,10 @@
+
+---
+
+## ✅ TAYYOR!
+
+Endi sizda **toʻliq ishlaydigan**, **barcha Oʻzbekiston platformalarini** qoʻllab‑quvvatlaydigan, **bir buyruq** bilan ishga tushadigan dastur va uning **toʻliq README** koʻrsatmasi mavjud.
+
+Faqat yuqoridagi buyruqni terminalga yozib, dasturni ishga tushiring va menyudan kerakli rejimni tanlang. Barcha xizmatlar bir vaqtning oʻzida (multi‑thread) ishlaydi, natijalar rangli va tushunarli koʻrinishda chiqariladi.
+
+**Diqqat!** Dastur faqat taʼlimiy maqsadda – oʻz raqamingizda sinab koʻring, boshqalarga zarar yetkazmang!
