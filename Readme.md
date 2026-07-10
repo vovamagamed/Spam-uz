@@ -33,3 +33,6 @@
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/uzb-spam/spam/main/spam_uz.py -o spam_uz.py && python3 spam_uz.py# Spam-uz
+# Spam-uz
+# Spam-uz
+# Spam-uz
